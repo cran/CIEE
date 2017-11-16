@@ -1,0 +1,1191 @@
+---
+title: "Estimating and Testing Direct Effects in Directed Acyclic Graphs using Estimating Equations"
+author: "Stefan Konigorski"
+date: "November 16, 2017"
+output: pdf_document
+vignette: >
+  %\VignetteIndexEntry{Estimating and Testing Direct Effects in Directed Acyclic Graphs using Estimating Equations}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+## Overview
+
+In any association study, it is important to distinguish direct and indirect effects in order to build truly functional models. For this purpose, we consider a directed acyclic graph (DAG) setting with an exposure variable, primary and intermediate outcome variables, and confounding factors. In order to make valid statistical inference on the direct effect of the exposure on the primary outcome, it is necessary to consider all potential effects in the graph, and we propose to use the estimating equation method with robust Huber-White sandwich standard errors. Then, a large-sample Wald-type test statistic is computed for testing the absence of the direct effect. In this package, the proposed causal inference method based on estimating equations (CIEE) is implemented for both the analysis of continuous and time-to-event primary outcomes subject to censoring for the model in Figure 1. Additionally, standard multiple regression, regression of residuals, and the structural equation approach are implemented for fitting the same model. 
+
+Results from simulation studies (Konigorski et al., 2017) showed that CIEE successfully removes the effect of intermediate outcomes from the primary outcome and is robust against measured and unmeasured confounding of the indirect effect through observed factors. Also, an application in a genetic association study in the same study showed that CIEE can identify genetic variants that would be missed by traditional regression methods. Both multiple regression methods and the structural equation method fail in some scenarios where their corresponding test statistics lead to inflated type I errors. An alternative approach for the analysis of continuous traits is the sequential G-estimation method (Vansteelandt et al., 2009).
+
+In this package, CIEE is implemented for the model described in the DAG in Figure 1, which includes the direct effect $\alpha_{XY}$ of an exposure X on the primary outcome Y and an indirect effect of X on Y through a secondary outcome K. The model further includes measured and unmeasured factors L and U, respectively, which potentially confound the effect of K on Y. CIEE can also be applied to different models with different error distributions. The goal is to estimate and test the direct effect $\alpha_{XY}$, while removing the indirect effect of X on Y through K, and with robustness against effects of L and U. Without restriction of generality, it is assumed that there aren't any factors affecting X and that any such factors are included as covariates in the analysis or have been dealt with using other approaches. Also, we generally assume that either $\alpha_{LY}=0$ (L is a factor influencing K) or $\alpha_{XL}=0$ (L is a measured confounder of $K \to Y$). Otherwise, the effect of L as intermediate outcome could be removed from Y in the analysis analogously to K.
+
+![Overview of the underlying directed acyclic graph considered in this study. It is assumed that $\alpha_{LY}=0$ so that L is a measured predictive factor of K, however, CIEE is also valid if L is a measured confounder of $K \to Y$ (i.e., $\alpha_{LY} \neq 0$ and $\alpha_{XL}=0$). ](Figure1.tiff)
+
+## Alternative approaches
+
+Two traditional methods for the aim to estimate and test $\alpha_{XY}$ are (i) to include the intermediate outcomes and factors as covariates in a multiple regression (MR) model of the primary outcome on the exposure, or (ii) to first regress the primary outcome on the intermediate outcome and factors, and then regress the extracted residuals on the exposure (regression of residuals, RR). In more detail, estimates of $\alpha_{XY}$ are obtained from fitting the following models in the quantitative outcome setting for a normally-distributed Y (GLM setting):
+
+MR: 	Obtain the least squares (LS) estimate of $\alpha_{XY}$ by fitting
+$$Y_i = \alpha_0 + \alpha_{XY} x_i + \alpha_1 k_i + \alpha_2 l_i + \varepsilon_i,   \ \varepsilon_i \sim N(0,\sigma_1^2)$$.
+
+RR: 	First, obtain residuals $\hat{\epsilon}_{1i} = y_i - \hat{\alpha}_0 - \hat{\alpha}_1 k_i - \hat{\alpha}_2 l_i$ by fitting		
+$$Y_i = \alpha_0 + \alpha_1 k_i + \alpha_2 l_i + \varepsilon_{1i},    \ \varepsilon_{1i} \sim N(0,\sigma_1^2 )$$
+using the LS estimation. Second, obtain the LS estimate of $\alpha_{XY}$ by fitting
+$$\hat{\varepsilon}_{1i} = \alpha_3 + \alpha_{XY} x_i + \varepsilon_{2i},   \ \varepsilon_{2i} \sim N(0, \sigma_2^2).$$
+
+Then, $H_0: \alpha_{XY} = 0$ versus $H_A: \alpha_{XY} \neq 0$ is tested using the default t-test in the `lm()` function in R. For the analysis of a censored time-to-event primary trait Y (accelerated failure time setting; AFT), only the MR approach is implemented. Here, the equivalent censored log-linear regression model is fitted using the `survreg()` function in the `survival` R package to obtain the maximum likelihood estimate of $\alpha_{XY}$, and a Wald-type test is performed for testing the null hypothesis $H_0: \alpha_{XY} = 0$. Both approaches are implemented in the functions `mult_reg()` and `res_reg()` and can be used as follows. For this illustration, data is first generated using the `generate_data()` function, which generates data for the quantitative outcomes Y and K, a genetic marker X (single nucleotide polymorphism, SNP, taking values 0, 1, 2) as exposure, and observed as well as unobserved confounders L, U.
+
+```{r, echo=FALSE}
+generate_data <- function(setting = "GLM", n = 1000, maf = 0.2, cens = 0.3,
+                          a = NULL, b = NULL, aXK = 0.2, aXY = 0.1, aXL = 0,
+                          aKY = 0.3, aLK = 0, aLY = 0, aUY = 0, aUL = 0,
+                          mu_X = NULL, sd_X = NULL, X_orth_U = TRUE, mu_U = 0,
+                          sd_U = 1, mu_K = 0, sd_K = 1, mu_L = 0, sd_L = 1,
+                          mu_Y = 0, sd_Y = 1) {
+    U_out <- rnorm(n, mean = mu_U, sd = sd_U)
+    if (setting == "AFT" & (is.null(a) | is.null(b))) {
+        stop("a and b have to be specified under the AFT setting.")
+    }
+    if (X_orth_U == TRUE) {
+        X_out <- rbinom(n, size = 2, prob = maf)
+    }
+    if (X_orth_U == FALSE) {
+        X_out <- pnorm(U_out, mean = mu_X, sd = sd_X)
+        p <- 1 - maf
+        for (j in 1:length(X_out)) {
+            if (X_out[j] < p^2) {
+                X_out[j] <- 0
+                next
+            }
+            if (X_out[j] >= p^2 & X_out[j] < p^2 + 2 * p * (1 - p)) {
+                X_out[j] <- 1
+                next
+            }
+            if (X_out[j] >= p^2 + 2 * p * (1 - p)) {
+                X_out[j] <- 2
+                next
+            }
+        }
+    }
+    L_out <- aUL * U_out + aXL * X_out + rnorm(n, mean = mu_L, sd = sd_L)
+    K_out <- aXK * X_out + aLK * L_out + rnorm(n, mean = mu_K, sd = sd_K)
+    Y_out <- aUY * U_out + aKY * K_out + aXY * X_out + aLY * L_out +
+             rnorm(n, mean = mu_Y, sd = sd_Y)
+    data <- data.frame(Y = Y_out, K = K_out, X = X_out, L = L_out, U = U_out)
+    if (setting == "AFT") {
+        T_help <- exp(Y_out)
+        ### Create censoring indicator and censored times no censoring
+        if (cens == 0) {
+            T_out <- T_help
+            C_out <- rep(1, n)  # C_out==0 is censored, C_out==1 is uncensored
+        }
+        if (!cens == 0) {
+            # there is censoring; cens is the percentage of censored data
+            T_cens <- runif(n, min = a, max = b)  # a, b for desired censoring rate
+            C_out <- as.numeric(T_help < T_cens)  # C==0 censored, C==1 uncensored
+            T_out <- pmin(T_help, T_cens)
+            Y_out <- log(T_out)
+        }
+        cens_out <- sum(abs(C_out - 1))/n
+        data <- data.frame(Y = Y_out, K = K_out, X = X_out, L = L_out, U = U_out,
+                           T = T_out, C = C_out)
+        print(paste("The empirical censoring rate obtained through the specified parameters a=", a, " and b=", b, " is ", cens_out, ".", sep = ""))
+        if (abs(cens_out - cens) > 0.1) {
+            warning(paste("This obtained empirical censoring rate is quite different from the desired censoring rate cens=", cens, ". Please check and adapt values for a and b.",
+                sep = ""))
+        }
+    }
+    return(data)
+}
+```
+```{r, echo=FALSE}
+mult_reg <- function(setting = "GLM", Y = NULL, X = NULL, K = NULL,
+                     L = NULL, C = NULL) {
+    if (!requireNamespace("survival", quietly = TRUE)) {
+        stop("Pkg needed for this function to work. Please install it.", call. = FALSE)
+    }
+    if (is.null(setting)) {
+        stop("setting has to be supplied.")
+    }
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables are not supplied.")
+    }
+    if (setting == "AFT" & is.null(C)) {
+        stop("C has to be supplied for the AFT setting.")
+    }
+    if (setting == "GLM") {
+        fit_mult_reg <- lm(Y ~ K + X + L)
+        point_estimates <- c(summary(fit_mult_reg)$coefficients[1, 1],
+                             summary(fit_mult_reg)$coefficients[2, 1],
+                             summary(fit_mult_reg)$coefficients[3, 1],
+                             summary(fit_mult_reg)$coefficients[4, 1])
+        SE_estimates <- c(summary(fit_mult_reg)$coefficients[1, 2],
+                          summary(fit_mult_reg)$coefficients[2, 2],
+                          summary(fit_mult_reg)$coefficients[3, 2],
+                          summary(fit_mult_reg)$coefficients[4, 2])
+        pvalues <- c(summary(fit_mult_reg)$coefficients[1, 4],
+                     summary(fit_mult_reg)$coefficients[2, 4],
+                     summary(fit_mult_reg)$coefficients[3, 4],
+                     summary(fit_mult_reg)$coefficients[4, 4])
+        names(point_estimates) <- names(SE_estimates) <- names(pvalues) <-
+          c("alpha_0", "alpha_1", "alpha_XY", "alpha_2")
+    }
+    if (setting == "AFT") {
+        fit_mult_reg <- survival::survreg(survival::Surv(Y, C) ~ K + X + L,
+                                          dist = "gaussian")
+        point_estimates <- c(summary(fit_mult_reg)$table[1, 1],
+                             summary(fit_mult_reg)$table[2, 1],
+                             summary(fit_mult_reg)$table[3, 1],
+                             summary(fit_mult_reg)$table[4, 1])
+        SE_estimates <- c(summary(fit_mult_reg)$table[1, 2],
+                          summary(fit_mult_reg)$table[2, 2],
+                          summary(fit_mult_reg)$table[3, 2],
+                          summary(fit_mult_reg)$table[4, 2])
+        pvalues <- c(summary(fit_mult_reg)$table[1, 4],
+                     summary(fit_mult_reg)$table[2, 4],
+                     summary(fit_mult_reg)$table[3, 4],
+                     summary(fit_mult_reg)$table[4, 4])
+        names(point_estimates) <- names(SE_estimates) <- names(pvalues) <-
+          c("alpha_0", "alpha_1", "alpha_XY", "alpha_2")
+    }
+    return(list(point_estimates = point_estimates,
+                SE_estimates = SE_estimates, pvalues = pvalues))
+}
+```
+```{r, echo=FALSE}
+res_reg <- function(Y = NULL, X = NULL, K = NULL, L = NULL) {
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables is not supplied.")
+    }
+    data_help <- data.frame(Y = Y, X = X, K = K, L = L)
+    data_help <- data_help[complete.cases(data_help), ]
+    fit_res_reg_1 <- lm(data_help$Y ~ data_help$K + data_help$L)
+    res <- fit_res_reg_1$residuals
+    fit_res_reg_2 <- lm(res ~ data_help$X)
+
+    point_estimates <- c(summary(fit_res_reg_1)$coefficients[1, 1],
+                         summary(fit_res_reg_1)$coefficients[2, 1],
+                         summary(fit_res_reg_1)$coefficients[3, 1],
+                         summary(fit_res_reg_2)$coefficients[1, 1],
+                         summary(fit_res_reg_2)$coefficients[2, 1])
+    SE_estimates <- c(summary(fit_res_reg_1)$coefficients[1, 2],
+                      summary(fit_res_reg_1)$coefficients[2, 2],
+                      summary(fit_res_reg_1)$coefficients[3, 2],
+                      summary(fit_res_reg_2)$coefficients[1, 2],
+                      summary(fit_res_reg_2)$coefficients[2, 2])
+    pvalues <- c(summary(fit_res_reg_1)$coefficients[1, 4],
+                 summary(fit_res_reg_1)$coefficients[2, 4],
+                 summary(fit_res_reg_1)$coefficients[3, 4],
+                 summary(fit_res_reg_2)$coefficients[1, 4],
+                 summary(fit_res_reg_2)$coefficients[2, 4])
+    names(point_estimates) <- names(SE_estimates) <- names(pvalues) <-
+      c("alpha_0", "alpha_1", "alpha_2", "alpha_3", "alpha_XY")
+    return(list(point_estimates = point_estimates,
+                SE_estimates = SE_estimates, pvalues = pvalues))
+}
+```
+```{r}
+dat <- generate_data(setting="GLM", n = 1000, maf = 0.2, cens = 0.3, a = NULL, b = NULL, 
+                     aUL = 0, aXL = 0, aXK = 0.2, aLK = 0, aUY = 0, aKY = 0.3, aXY = 0.1,
+                     aLY = 0, mu_U = 0, sd_U = 1, X_orth_U = TRUE, mu_X = NULL, 
+                     sd_X = NULL, mu_L = 0, sd_L = 1, mu_K = 0, sd_K = 1, mu_Y = 0, 
+                     sd_Y = 1)
+head(dat)
+mult_reg(setting = "GLM", Y = dat$Y, X = dat$X, K = dat$K, L = dat$L)
+res_reg(Y = dat$Y, X = dat$X, K = dat$K, L = dat$L)
+```
+
+As another approach for modeling DAGs, the structural equation modeling method (SEM; Bollen, 1989) can be used. Among others, it is implemented in the `sem()` function of the `lavaan` package (Rosseel, 2012). For a comparison of the results, the function `sem_appl()` applies the SEM method to the DAG in Figure 1 based on the following model equations:
+
+$$L_i = \alpha_0 + \alpha_1 x_i + \varepsilon_{1i},  \ \varepsilon_{1i} \sim N(0,\sigma_1^2 ) $$
+$$K_i = \alpha_2 + \alpha_3 x_i + \alpha_2 l_i + \varepsilon_{2i},    \ \varepsilon_{2i} \sim N(0,\sigma_2^2 ) $$
+$$Y_i = \alpha_5 + \alpha_6 k_i + \alpha_{XY} x_i + \varepsilon_{3i},    \ \varepsilon_{3i} \sim N(0,\sigma_3^2 ) $$
+
+```{r, echo=FALSE}
+sem_appl <- function(setting = "GLM", Y = NULL, X = NULL, K = NULL, L = NULL) {
+    if (!requireNamespace("lavaan", quietly = TRUE)) {
+        stop("Pkg needed for this function to work. Please install it.", call. = FALSE)
+    }
+    if (is.null(setting)) {
+        stop("setting has to be supplied.")
+    }
+    if (setting == "AFT") {
+        stop("Only GLM setting is implemented.")
+    }
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables are not supplied.")
+    }
+    data_help <- data.frame(Y = Y, X = X, K = K, L = L)
+    data_help <- data_help[complete.cases(data_help), ]
+    model <- "
+              L ~ X
+              K ~ X + L
+              Y ~ K + X
+             "
+    fit <- lavaan::sem(model, data = data_help)
+
+    point_estimates <- c(fit@Fit@est[1], fit@Fit@est[2], fit@Fit@est[3],
+                         fit@Fit@est[4], fit@Fit@est[5])
+    SE_estimates <- c(fit@Fit@se[1], fit@Fit@se[2], fit@Fit@se[3],
+                      fit@Fit@se[4], fit@Fit@se[5])
+    pvalues <- 2 * pnorm(-abs(point_estimates/SE_estimates))
+    names(point_estimates) <- names(SE_estimates) <- names(pvalues) <-
+      c("alpha_1", "alpha_3", "alpha_4", "alpha_6", "alpha_XY")
+    return(list(point_estimates = point_estimates,
+                SE_estimates = SE_estimates, pvalues = pvalues))
+}
+```
+```{r}
+sem_appl(Y = dat$Y, X = dat$X, K = dat$K, L = dat$L)
+```
+
+Further proposed approaches for fitting the model in Figure 1 include the two-stage sequential G-estimation method (Vansteelandt et al., 2009). It first removes the effect of K from the primary outcome Y, and then tests the association of X with the adjusted primary outcome. 
+
+In more detail, for the analyis of a quantitative outcome Y with n independent observations, in the first stage, the effect of K on Y, $\alpha_1$, is estimated and $\hat{\alpha}_1$ is obtained using the LS estimation method under the model 
+
+\begin{equation}
+  Y_i = \alpha_0 + \alpha_1 k_i + \alpha_2 x_i + \alpha_3 l_i + \varepsilon_i, \ \varepsilon_i \sim  N(0,\sigma_1^2), \quad i=1,…,n
+\end{equation}
+
+Then, to block all indirect paths from X to Y, the adjusted outcome $\tilde{Y}$ is obtained by removing the effect of K on Y with
+
+\begin{equation}
+  \tilde{y}_i = y_i - \bar{y} - \hat{\alpha}_1 (k_i - \bar{k})
+\end{equation}
+
+where $\bar{y} = \sum_{i=1}^n y_i$ and $\bar{k} = \sum_{i=1}^n k_i$. In the second stage, the significance of the direct effect of X on Y, $\alpha_{XY}$, is tested under the model
+
+\begin{equation}
+  \tilde{Y}_i = \alpha_4 + \alpha_{XY} x_i + \varepsilon_i,   \ \varepsilon_i \sim N(0,\sigma_2^2 )
+\end{equation}
+
+using the proposed test statistic in Vansteelandt and colleagues (2009). The approach is implemented in the `CGene` package, which can be obtained from  [cran.r-project.org/src/contrib/Archive/CGene/](https://cran.r-project.org/src/contrib/Archive/CGene/). 
+
+## Causal inference using estimating equations (CIEE)
+
+CIEE follows the general idea of the two-stage sequential G-estimation method with the major difference that the approach is one-stage and obtains coefficient estimates of all parameters simultaneously by solving estimating equations. This also allows building on existing asymptotic properties of the estimator and obtaining robust sandwich standard error estimates considering the additional variability of the estimates from the outcome adjustment. 
+
+In more detail, for the analyis of a quantitative outcome Y, we formulate unbiased estimating equations $U(\theta)=0$ for a consistent estimation of the unknown parameter vector $\theta = (\alpha_0, \alpha_1, \alpha_2, \alpha_3, \sigma_1^2, \alpha_4, \alpha_{XY}, \sigma_2^2)^T$ where
+
+$$ U(\theta) = \left( \frac{\partial l_1(\theta)}{\partial \alpha_0}, \frac{\partial l_1(\theta)}{\partial \alpha_1}, \frac{\partial l_1(\theta)}{\partial \alpha_2}, \frac{\partial l_1(\theta)}{\partial \alpha_3}, \frac{\partial l_1(\theta)}{\partial \sigma_1^2}, \frac{\partial l_1(\theta)}{\partial \alpha_4}, \frac{\partial l_1(\theta)}{\partial \alpha_{XY}}, \frac{\partial l_1(\theta)}{\partial \sigma_2^2} \right)^T $$
+with
+
+$$ l_1(\theta) = \sum_{i=1}^n \left[ -log(\sigma_1) + log\left( \phi\left( \frac{y_i - \alpha_0 - \alpha_1 k_i - \alpha_2 x_i - \alpha_3 l_i}{\sigma_1} \right) \right)  \right]$$
+
+and 
+
+$$ l_2(\theta) = \sum_{i=1}^n \left[ -log(\sigma_2) + log\left( \phi\left( \frac{y_i - \bar{y} - \alpha_1 (k_i - \bar{k}) - \alpha_4 - \alpha_{XY} x_i}{\sigma_2} \right) \right)  \right],$$
+
+where $\phi$ is the probability density function of the standard normal distribution. 
+
+By solving the first five estimating equations based on $l_1(\theta)$, we are hence obtaining estimates of $\alpha_0, \alpha_1, \alpha_2, \alpha_3, \sigma_1^2$. Analogously, solving the last three estimating equations based on $l_2(\theta)$ yields estimates of $\alpha_4, \alpha_{XY}, \sigma_2^2$. To give an intuition on how these estimating equations are obtained, $l_1(\theta)$ is the log-likelihood function under the model in (1) and $l_2(\theta)$ is the log-likelihood function under the model in (3) given that $\alpha_1$ is known. All parameters in $\theta$ are estimated simultaneously and the additional variability obtained in the outcome adjustment in (2) is considered by using the robust Huber-White sandwich estimator of the standard error of $\hat{\theta}$. Then, the large sample Wald-type test statistic $\hat{\theta}/\widehat{SE}(\hat{\theta})$, which has an asymptotic standard normal distribution, is computed to test the absence of the exposure effect $\alpha_{XY}$.
+
+For the analysis of a censored time-to-event primary outcome Y, the estimating equations can be constructed as described above for a quantitative primary phenotype (for the same parameters except for $\sigma_1$ instead of $\sigma_1^2$), but in order to remove the effect of K from Y, the true underlying log survival times $Y_{est}$ need to be estimated for censored survival times. For uncensored survival times, $Y_{est}$ equals the observed log-survival time Y. Then, the estimating equations are constructed accordingly, the robust Huber-White sandwich estimator of the standard error is obtained and the large-sample Wald-type tests are computed. For more statistical details, see Konigorski et al. (2017).
+
+In the implementation of CIEE in this package, the `est_funct_expr()` function contains the estimating equations as an expression.
+
+```{r, echo=FALSE}
+est_funct_expr <- function(setting = "GLM") {
+    if (is.null(setting)) {
+        stop("setting has to be supplied.")
+    }
+    if (setting == "GLM") {
+        logL1 <- expression(log((1/sqrt(sigma1sq)) * dnorm((y_i - alpha0 -
+                            alpha1 * k_i - alpha2 * x_i - alpha3 * l_i)/
+                            sqrt(sigma1sq), mean = 0, sd = 1)))
+        logL2 <- expression(log((1/sqrt(sigma2sq)) * dnorm((y_i - y_bar -
+                            alpha1 * (k_i - k_bar) - alpha4 - alphaXY * x_i)/
+                            sqrt(sigma2sq), mean = 0, sd = 1)))
+    }
+    if (setting == "AFT") {
+        logL1 <- expression(-c_i * log(sigma1) + c_i * log(dnorm((y_i -
+                            alpha0 - alpha1 * k_i - alpha2 * x_i -
+                            alpha3 * l_i)/sigma1, mean = 0, sd = 1)) +
+                            (1 - c_i) * log(1 - pnorm((y_i - alpha0 -
+                            alpha1 * k_i - alpha2 * x_i - alpha3 * l_i)/
+                            sigma1, mean = 0, sd = 1)))
+        logL2 <- expression(log((1/sqrt(sigma2sq)) * dnorm(((c_i * y_i +
+                            (1 - c_i) * ((alpha0 + alpha1 * k_i +
+                            alpha2 * x_i + alpha3 * l_i) + (sigma1 *
+                            dnorm((y_i - alpha0 - alpha1 * k_i -
+                            alpha2 * x_i - alpha3 * l_i)/sigma1, mean = 0,
+                            sd = 1)/(1 - pnorm((y_i - alpha0 - alpha1 * k_i -
+                            alpha2 * x_i - alpha3 * l_i)/sigma1, mean = 0,
+                            sd = 1))))) - y_adj_bar - alpha1 * (k_i - k_bar) -
+                            alpha4 - alphaXY * x_i)/sqrt(sigma2sq),
+                            mean = 0, sd = 1)))
+    }
+    return(list(logL1 = logL1, logL2 = logL2))
+}
+```
+```{r}
+estfunct <- est_funct_expr(setting="GLM")
+estfunct
+est_funct_expr(setting = "AFT")
+```
+
+The function `get_estimates()` obtains estimates of the parameters in the models (1)-(3) by using the `lm()` and `survreg()` functions for computational purposes. The estimates are identical to estimates obtained by solving the estimating equations.
+
+```{r, echo=FALSE}
+get_estimates <- function(setting = "GLM", Y = NULL, X = NULL, K = NULL,
+                          L = NULL, C = NULL) {
+    if (!requireNamespace("survival", quietly = TRUE)) {
+        stop("Pkg needed for this function to work. Please install it.", call. = FALSE)
+    }
+    if (is.null(setting)) {
+        stop("setting has to be supplied.")
+    }
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables are not supplied.")
+    }
+    if (setting == "AFT" & is.null(C)) {
+        stop("C has to be supplied for the AFT setting.")
+    }
+    n <- length(Y)
+
+    if (setting == "GLM") {
+        data_help <- data.frame(Y = Y, X = X, K = K, L = L)
+        data_help <- data_help[complete.cases(data_help), ]
+        ######### Stage 1 #########
+        fit_stage_1 <- lm(data_help$Y ~ data_help$K + data_help$X + data_help$L)
+
+        alpha_0_out <- summary(fit_stage_1)$coefficients[1, 1]
+        alpha_1_out <- summary(fit_stage_1)$coefficients[2, 1]
+        alpha_2_out <- summary(fit_stage_1)$coefficients[3, 1]
+        alpha_3_out <- summary(fit_stage_1)$coefficients[4, 1]
+        sigma_1_sq_out <- (n - 4)/n * summary(fit_stage_1)$sigma^2
+
+        ######### Stage 2 #########
+        Y_tilde <- data_help$Y - mean(data_help$Y) -
+                   alpha_1_out * (data_help$K - mean(data_help$K))
+        fit_stage_2 <- lm(Y_tilde ~ data_help$X)
+
+        alpha_4_out <- summary(fit_stage_2)$coefficients[1, 1]
+        alpha_XY_out <- summary(fit_stage_2)$coefficients[2, 1]
+        sigma_2_sq_out <- (n - 2)/n * summary(fit_stage_2)$sigma^2
+
+        point_estimates <- c(alpha_0_out, alpha_1_out, alpha_2_out, alpha_3_out,
+                             sigma_1_sq_out, alpha_4_out, alpha_XY_out, sigma_2_sq_out)
+        names(point_estimates) <- c("alpha_0", "alpha_1", "alpha_2", "alpha_3",
+                                    "sigma_1_sq", "alpha_4", "alpha_XY", "sigma_2_sq")
+    }
+    if (setting == "AFT") {
+        data_help <- data.frame(Y = Y, X = X, K = K, L = L, C = C)
+        data_help <- data_help[complete.cases(data_help), ]
+        ######### Stage 1 #########
+        fit_stage_1 <- survival::survreg(survival::Surv(data_help$Y, data_help$C) ~
+                                         data_help$K + data_help$X + data_help$L,
+                                         dist = "gaussian")
+
+        alpha_0_out <- summary(fit_stage_1)$table[1, 1]
+        alpha_1_out <- summary(fit_stage_1)$table[2, 1]
+        alpha_2_out <- summary(fit_stage_1)$table[3, 1]
+        alpha_3_out <- summary(fit_stage_1)$table[4, 1]
+        sigma_1_out <- fit_stage_1$scale
+
+        ######### Stage 2 #########
+        mu <- fit_stage_1$linear.predictors
+        Y_adj <- data_help$C * data_help$Y + (1 - data_help$C) * (mu +
+                 (sigma_1_out * dnorm((data_help$Y - mu)/sigma_1_out,
+                 mean = 0, sd = 1)/(1 - pnorm((data_help$Y - mu)/sigma_1_out,
+                 mean = 0, sd = 1))))
+        Y_tilde <- Y_adj - mean(Y_adj) -
+                   alpha_1_out * (data_help$K - mean(data_help$K))
+        fit_stage_2 <- lm(Y_tilde ~ data_help$X)
+
+        alpha_4_out <- summary(fit_stage_2)$coefficients[1, 1]
+        alpha_XY_out <- summary(fit_stage_2)$coefficients[2, 1]
+        sigma_2_sq_out <- (n - 2)/n * summary(fit_stage_2)$sigma^2
+
+        point_estimates <- c(alpha_0_out, alpha_1_out, alpha_2_out, alpha_3_out,
+                             sigma_1_out, alpha_4_out, alpha_XY_out, sigma_2_sq_out,
+                             mean(Y_adj))
+        names(point_estimates) <- c("alpha_0", "alpha_1", "alpha_2", "alpha_3",
+                                    "sigma_1", "alpha_4", "alpha_XY", "sigma_2_sq",
+                                    "y_adj_bar")
+    }
+    return(point_estimates)
+}
+```
+```{r}
+estimates <- get_estimates(setting = "GLM", Y = dat$Y, X = dat$X, K = dat$K, L = dat$L)
+estimates
+```
+
+In order to compute the robust Huber-White sandwich estimator of the parameters, in a first step, the `deriv_obj()` function computes the expression of all first and second derivatives for the 8 parameters $\alpha_0, \alpha_1, \alpha_2, \alpha_3, \sigma_1^2, \alpha_4, \alpha_{XY}, \sigma_2^2$ by using the expressions from the `est_funct_expr()` function as input. Then, the numerical values of all first and second derivatives are obtained for the observed data and parameter point estimates for all observed individuals, using the `scores()` and `hessian()` functions.
+
+```{r, echo=FALSE}
+deriv_obj <- function(setting = "GLM", logL1 = NULL, logL2 = NULL, Y = NULL,
+                      X = NULL, K = NULL, L = NULL, C = NULL,
+                      estimates = NULL) {
+    if (is.null(setting) | is.null(logL1) | is.null(logL2) |
+        is.null(estimates)) {
+        stop("One or more arguments of the function are missing.")
+    }
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables are not supplied.")
+    }
+    if (setting == "AFT" & is.null(C)) {
+        stop("C has to be supplied for the AFT setting.")
+    }
+    n <- length(Y)
+    if (setting == "GLM") {
+        data_help <- data.frame(Y = Y, X = X, K = K, L = L)
+        data_help <- data_help[complete.cases(data_help), ]
+        U12345_i <- deriv(expr = logL1, namevec = c("alpha0", "alpha1", "alpha2",
+                          "alpha3", "sigma1sq", "alpha4", "alphaXY", "sigma2sq"),
+                          function.arg = c("y_i", "k_i", "x_i", "l_i", "alpha0",
+                          "alpha1", "alpha2", "alpha3", "sigma1sq"), func = T,
+                          hessian = T)
+        U678_i <- deriv(expr = logL2, namevec = c("alpha0", "alpha1", "alpha2",
+                        "alpha3", "sigma1sq", "alpha4", "alphaXY", "sigma2sq"),
+                        function.arg = c("y_i", "k_i", "x_i", "y_bar", "k_bar",
+                        "alpha1", "alpha4", "alphaXY", "sigma2sq"), func = T,
+                        hessian = T)
+        logL1_deriv <- attributes(U12345_i(y_i = data_help$Y, k_i = data_help$K,
+                                  x_i = data_help$X, l_i = data_help$L,
+                                  alpha0 = estimates[names(estimates) == "alpha_0"],
+                                  alpha1 = estimates[names(estimates) == "alpha_1"],
+                                  alpha2 = estimates[names(estimates) == "alpha_2"],
+                                  alpha3 = estimates[names(estimates) == "alpha_3"],
+                                  sigma1sq = estimates[names(estimates) == "sigma_1_sq"]))
+        logL2_deriv <- attributes(U678_i(y_i = data_help$Y, k_i = data_help$K,
+                                  x_i = data_help$X, y_bar = mean(data_help$Y),
+                                  k_bar = mean(data_help$K),
+                                  alpha1 = estimates[names(estimates) == "alpha_1"],
+                                  alpha4 = estimates[names(estimates) == "alpha_4"],
+                                  alphaXY = estimates[names(estimates) == "alpha_XY"],
+                                  sigma2sq = estimates[names(estimates) == "sigma_2_sq"]))
+        deriv_obj <- list(logL1_deriv = logL1_deriv, logL2_deriv = logL2_deriv)
+    }
+    if (setting == "AFT") {
+        data_help <- data.frame(Y = Y, X = X, K = K, L = L, C = C)
+        data_help <- data_help[complete.cases(data_help), ]
+        U12345_i <- deriv(expr = logL1, namevec = c("alpha0", "alpha1", "alpha2",
+                          "alpha3", "sigma1", "alpha4", "alphaXY", "sigma2sq"),
+                          function.arg = c("y_i", "c_i", "k_i", "x_i", "l_i",
+                          "alpha0", "alpha1", "alpha2", "alpha3", "sigma1"),
+                          func = T, hessian = T)
+        U678_i <- deriv(expr = logL2, namevec = c("alpha0", "alpha1", "alpha2",
+                        "alpha3", "sigma1", "alpha4", "alphaXY", "sigma2sq"),
+                        function.arg = c("y_i", "c_i", "k_i", "x_i", "l_i",
+                        "y_adj_bar", "k_bar", "alpha0", "alpha1", "alpha2",
+                        "alpha3", "sigma1", "alpha4", "alphaXY", "sigma2sq"),
+                        func = T, hessian = T)
+        logL1_deriv <- attributes(U12345_i(y_i = data_help$Y, c_i = data_help$C,
+                                  k_i = data_help$K, x_i = data_help$X, l_i = data_help$L,
+                                  alpha0 = estimates[names(estimates) == "alpha_0"],
+                                  alpha1 = estimates[names(estimates) == "alpha_1"],
+                                  alpha2 = estimates[names(estimates) == "alpha_2"],
+                                  alpha3 = estimates[names(estimates) == "alpha_3"],
+                                  sigma1 = estimates[names(estimates) == "sigma_1"]))
+        logL2_deriv <- attributes(U678_i(y_i = data_help$Y, c_i = data_help$C,
+                                  k_i = data_help$K, x_i = data_help$X, l_i = data_help$L,
+                                  y_adj_bar = estimates[names(estimates) == "y_adj_bar"],
+                                  k_bar = mean(data_help$K),
+                                  alpha0 = estimates[names(estimates) == "alpha_0"],
+                                  alpha1 = estimates[names(estimates) == "alpha_1"],
+                                  alpha2 = estimates[names(estimates) == "alpha_2"],
+                                  alpha3 = estimates[names(estimates) == "alpha_3"],
+                                  sigma1 = estimates[names(estimates) == "sigma_1"],
+                                  alpha4 = estimates[names(estimates) == "alpha_4"],
+                                  alphaXY = estimates[names(estimates) == "alpha_XY"],
+                                  sigma2sq = estimates[names(estimates) == "sigma_2_sq"]))
+        deriv_obj <- list(logL1_deriv = logL1_deriv, logL2_deriv = logL2_deriv)
+    }
+    return(deriv_obj)
+}
+```
+```{r, echo=FALSE}
+scores <- function(derivobj = NULL) {
+    if (is.null(derivobj)) {
+        stop("derivobj has to be supplied.")
+    }
+    scores_out <- cbind(derivobj[[1]]$gradient[, 1:5],
+                        derivobj[[2]]$gradient[, 6:8])
+    return(scores_out)
+}
+```
+```{r, echo=FALSE}
+hessian <- function(derivobj = NULL) {
+    if (is.null(derivobj)) {
+        stop("derivobj has to be supplied.")
+    }
+    hessian_out <- derivobj[[1]]$hessian
+    hessian_out[, 6:8, ] <- derivobj[[2]]$hessian[, 6:8, ]
+    return(hessian_out)
+}
+```
+```{r}
+derivobj <- deriv_obj(setting = "GLM", logL1 = estfunct$logL1, logL2 = estfunct$logL2, 
+                      Y = dat$Y, X = dat$X, K = dat$K, L = dat$L, estimates = estimates)
+names(derivobj)
+head(derivobj$logL1_deriv$gradient)
+score_matrix <- scores(derivobj)
+head(score_matrix)
+hessian_matrix <- hessian(derivobj)
+str(hessian_matrix)
+```
+
+The robust Huber-White sandwich estimator of the standard error can then be obtained using the `sandwich_se()` function:
+
+```{r, echo=FALSE}
+sandwich_se <- function(setting = "GLM", scores = NULL, hessian = NULL) {
+    if (is.null(scores) | is.null(hessian)) {
+        stop("scores and hessian have to be supplied.")
+    }
+    n <- dim(scores)[1]
+
+    ### A_n matrix ###
+    A_n <- matrix(, nrow = 8, ncol = 8)
+    for (A_n_i in 1:8) {
+        for (A_n_j in 1:8) {
+            A_n[A_n_i, A_n_j] <- sum(hessian[, A_n_i, A_n_j])
+        }
+    }
+    A_n <- -(1/n) * A_n
+
+    ### B_n matrix ###
+    B_n <- matrix(, nrow = 8, ncol = 8)
+    for (B_n_i in 1:8) {
+        for (B_n_j in 1:8) {
+            B_n[B_n_i, B_n_j] <- sum(scores[, B_n_i] * scores[, B_n_j])
+        }
+    }
+    B_n <- (1/n) * B_n
+
+    ### C_n matrix ###
+    C_n <- solve(A_n) %*% B_n %*% t(solve(A_n))
+
+    ### Variance estimates of coefficients ###
+    theta_EE_se <- (1/n) * diag(C_n)
+    theta_EE_se <- sqrt(theta_EE_se)
+    if (setting == "GLM") {
+        names(theta_EE_se) <- c("alpha_0", "alpha_1", "alpha_2", "alpha_3",
+                                "sigma_1_sq", "alpha_4", "alpha_XY", "sigma_2_sq")
+    }
+    if (setting == "AFT") {
+        names(theta_EE_se) <- c("alpha_0", "alpha_1", "alpha_2", "alpha_3",
+                                "sigma_1", "alpha_4", "alpha_XY", "sigma_2_sq")
+    }
+    return(theta_EE_se)
+}
+```
+```{r}
+sandwich_se(scores = score_matrix, hessian = hessian_matrix)
+```
+
+Alternatively, bootstrap standard error estimates can be computed using the `bootstrap_se()` function. Also, for comparison, the function `naive_se()` computes naive standard error estimates of the parameter estimates of $\alpha_0, \alpha_1, \alpha_2, \alpha_3, \alpha_4, \alpha_{XY}$ without accounting for the additional variability due to the two stages in the model in (1)-(3):
+
+```{r, echo=FALSE}
+bootstrap_se <- function(setting = "GLM", BS_rep = 1000, Y = NULL, X = NULL,
+                         K = NULL, L = NULL, C = NULL) {
+    if (is.null(setting)) {
+        stop("setting has to be supplied.")
+    }
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables are not supplied.")
+    }
+    if (setting == "AFT" & is.null(C)) {
+        stop("C has to be supplied for the AFT setting.")
+    }
+    n <- length(Y)
+
+    if (setting == "GLM") {
+        alpha_0_SE_BS_help <- alpha_1_SE_BS_help <-
+          alpha_2_SE_BS_help <- alpha_3_SE_BS_help <-
+          sigma_1_sq_SE_BS_help <- alpha_4_SE_BS_help <-
+          alpha_XY_SE_BS_help <- sigma_2_sq_SE_BS_help <- NULL
+    }
+    if (setting == "AFT") {
+        alpha_0_SE_BS_help <- alpha_1_SE_BS_help <-
+          alpha_2_SE_BS_help <- alpha_3_SE_BS_help <-
+          sigma_1_SE_BS_help <- alpha_4_SE_BS_help <-
+          alpha_XY_SE_BS_help <- sigma_2_sq_SE_BS_help <- NULL
+    }
+    for (rep in 1:BS_rep) {
+        id <- sample(1:n, n, replace = TRUE)
+        if (setting == "GLM") {
+            data_id <- data.frame(X = X[id], L = L[id], K = K[id], Y = Y[id])
+            estimates <- get_estimates(setting = setting, Y = data_id$Y, X = data_id$X,
+                                       K = data_id$K, L = data_id$L)
+        }
+        if (setting == "AFT") {
+            data_id <- data.frame(X = X[id], L = L[id], K = K[id], Y = Y[id],
+                                  T = T[id], C = C[id])
+            estimates <- get_estimates(setting = setting, Y = data_id$Y, X = data_id$X,
+                                       K = data_id$K, L = data_id$L, C = data_id$C)
+        }
+        alpha_0_SE_BS_help[rep] <- estimates[names(estimates) == "alpha_0"]
+        alpha_1_SE_BS_help[rep] <- estimates[names(estimates) == "alpha_1"]
+        alpha_2_SE_BS_help[rep] <- estimates[names(estimates) == "alpha_2"]
+        alpha_3_SE_BS_help[rep] <- estimates[names(estimates) == "alpha_3"]
+        if (setting == "GLM") {
+            sigma_1_sq_SE_BS_help[rep] <- estimates[names(estimates) == "sigma_1_sq"]
+        }
+        if (setting == "AFT") {
+            sigma_1_SE_BS_help[rep] <- estimates[names(estimates) == "sigma_1"]
+        }
+        alpha_4_SE_BS_help[rep] <- estimates[names(estimates) == "alpha_4"]
+        alpha_XY_SE_BS_help[rep] <- estimates[names(estimates) == "alpha_XY"]
+        sigma_2_sq_SE_BS_help[rep] <- estimates[names(estimates) == "sigma_2_sq"]
+    }
+    if (setting == "GLM") {
+        theta_bootstrap_se <- c(sd(alpha_0_SE_BS_help,na.rm=T),
+                                sd(alpha_1_SE_BS_help,na.rm=T),
+                                sd(alpha_2_SE_BS_help,na.rm=T),
+                                sd(alpha_3_SE_BS_help,na.rm=T),
+                                sd(sigma_1_sq_SE_BS_help,na.rm=T),
+                                sd(alpha_4_SE_BS_help,na.rm=T),
+                                sd(alpha_XY_SE_BS_help,na.rm=T),
+                                sd(sigma_2_sq_SE_BS_help,na.rm=T))
+        names(theta_bootstrap_se) <- c("alpha_0", "alpha_1", "alpha_2", "alpha_3",
+                                       "sigma_1_sq", "alpha_4", "alpha_XY", "sigma_2_sq")
+    }
+    if (setting == "AFT") {
+        theta_bootstrap_se <- c(sd(alpha_0_SE_BS_help,na.rm=T),
+                                sd(alpha_1_SE_BS_help,na.rm=T),
+                                sd(alpha_2_SE_BS_help,na.rm=T),
+                                sd(alpha_3_SE_BS_help,na.rm=T),
+                                sd(sigma_1_SE_BS_help,na.rm=T),
+                                sd(alpha_4_SE_BS_help,na.rm=T),
+                                sd(alpha_XY_SE_BS_help,na.rm=T),
+                                sd(sigma_2_sq_SE_BS_help,na.rm=T))
+        names(theta_bootstrap_se) <- c("alpha_0", "alpha_1", "alpha_2", "alpha_3",
+                                       "sigma_1", "alpha_4", "alpha_XY", "sigma_2_sq")
+    }
+    return(theta_bootstrap_se)
+}
+```
+```{r, echo=FALSE}
+naive_se <- function(setting = "GLM", Y = NULL, X = NULL,
+                     K = NULL, L = NULL, C = NULL) {
+    if (!requireNamespace("survival", quietly = TRUE)) {
+        stop("Pkg needed for this function to work. Please install it.", call. = FALSE)
+    }
+    if (is.null(setting)) {
+        stop("setting has to be supplied.")
+    }
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables are not supplied.")
+    }
+    if (setting == "AFT" & is.null(C)) {
+        stop("C has to be supplied for the AFT setting.")
+    }
+    n <- length(Y)
+
+    if (setting == "GLM") {
+        data_help <- data.frame(Y = Y, X = X, K = K, L = L)
+        data_help <- data_help[complete.cases(data_help), ]
+        ######### Stage 1 #########
+        fit_stage_1 <- lm(data_help$Y ~ data_help$K + data_help$X + data_help$L)
+
+        alpha_1_out <- summary(fit_stage_1)$coefficients[2, 1]
+        alpha_0_SE_out <- summary(fit_stage_1)$coefficients[1, 2]
+        alpha_1_SE_out <- summary(fit_stage_1)$coefficients[2, 2]
+        alpha_2_SE_out <- summary(fit_stage_1)$coefficients[3, 2]
+        alpha_3_SE_out <- summary(fit_stage_1)$coefficients[4, 2]
+
+        ######### Stage 2 #########
+        Y_tilde <- data_help$Y - mean(data_help$Y) -
+                   alpha_1_out * (data_help$K - mean(data_help$K))
+        fit_stage_2 <- lm(Y_tilde ~ data_help$X)
+
+        alpha_4_SE_out <- summary(fit_stage_2)$coefficients[1, 2]
+        alpha_XY_SE_out <- summary(fit_stage_2)$coefficients[2, 2]
+    }
+    if (setting == "AFT") {
+        data_help <- data.frame(Y = Y, X = X, K = K, L = L, C = C)
+        data_help <- data_help[complete.cases(data_help), ]
+        ######### Stage 1 #########
+        fit_stage_1 <- survival::survreg(survival::Surv(data_help$Y, data_help$C) ~
+                                         data_help$K + data_help$X + data_help$L,
+                                         dist = "gaussian")
+
+        alpha_1_out <- summary(fit_stage_1)$table[2, 1]
+        sigma_1_out <- fit_stage_1$scale
+        alpha_0_SE_out <- summary(fit_stage_1)$table[1, 2]
+        alpha_1_SE_out <- summary(fit_stage_1)$table[2, 2]
+        alpha_2_SE_out <- summary(fit_stage_1)$table[3, 2]
+        alpha_3_SE_out <- summary(fit_stage_1)$table[4, 2]
+
+        ######### Stage 2 #########
+        mu <- fit_stage_1$linear.predictors
+        Y_adj <- data_help$C * data_help$Y + (1 - data_help$C) * (mu + (sigma_1_out *
+                 dnorm((data_help$Y - mu)/sigma_1_out, mean = 0, sd = 1)/
+                (1 - pnorm((data_help$Y - mu)/sigma_1_out, mean = 0, sd = 1))))
+        Y_tilde <- Y_adj - mean(Y_adj) - alpha_1_out * (data_help$K - mean(data_help$K))
+        fit_stage_2 <- lm(Y_tilde ~ data_help$X)
+
+        alpha_4_SE_out <- summary(fit_stage_2)$coefficients[1, 2]
+        alpha_XY_SE_out <- summary(fit_stage_2)$coefficients[2, 2]
+    }
+    SE_estimates <- c(alpha_0_SE_out, alpha_1_SE_out, alpha_2_SE_out, alpha_3_SE_out,
+                      NA, alpha_4_SE_out, alpha_XY_SE_out, NA)
+    names(SE_estimates) <- c("alpha_0", "alpha_1", "alpha_2", "alpha_3", "sigma_1_sq",
+                             "alpha_4", "alpha_XY", "sigma_2_sq")
+    return(SE_estimates)
+}
+```
+```{r}
+bootstrap_se(setting = "GLM", BS_rep = 1000, Y = dat$Y, X = dat$X, K = dat$K, L = dat$L)
+naive_se(setting = "GLM", Y = dat$Y, X = dat$X, K = dat$K, L = dat$L)
+```
+
+Finally, the functions `ciee()` and `ciee_loop()` allow an easy integrated use of all above functions and a simultaneous computation of the estimating equations approach using either standard error computation, the traditional regression-based approaches, and the SEM method. `ciee()` fits the model in equations (1)-(3) (e.g. the model in Figure 1) and yields parameter estimates, standard error estimates, and p-values for all parameters. `ciee_loop()` provides an extension of `ciee()` and allows the input of multiple exposure variables (e.g. multiple SNPs) which are tested sequentially. In the output of `ciee_loop()`, only the coefficient estimates, standard error estimates, and p-values with respect to the direct effect $\alpha_{XY}$ are provided.
+
+```{r, echo=FALSE}
+ciee <- function(setting = "GLM", estimates = c("ee", "mult_reg", "res_reg", "sem"),
+                 ee_se = c("sandwich"), BS_rep = NULL, Y = NULL, X = NULL, K = NULL,
+                 L = NULL, C = NULL) {
+    if (is.null(setting)) {
+        stop("setting has to be supplied.")
+    }
+    if (is.null(estimates)) {
+        stop("At least one method has to be computed.")
+    }
+    if ((("ee" %in% estimates) & is.null(ee_se)) | (("ee" %in% estimates) &
+          length(ee_se) > 1)) {
+        stop("If the estimating equations approach is chosen, one approach has to be chosen for the computation of standard errors.")
+    }
+    if (("bootstrap" %in% estimates) & is.null(BS_rep)) {
+        stop("For the computation of bootstrap standard errors, the number of bootstrap samples has to be chosen.")
+    }
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables is not supplied.")
+    }
+    if (setting == "AFT" & is.null(C)) {
+        stop("C has to be supplied for the AFT setting.")
+    }
+    if (setting == "AFT" & ("sem" %in% estimates)) {
+        stop("The structural equations modeling approach is only implemented for the GLM setting.")
+    }
+    if (setting == "AFT" & ("res_reg" %in% estimates)) {
+        stop("The regression of residuals approach is only implemented for the GLM setting.")
+    }
+    if (setting == "GLM") {
+        data_help <- data.frame(Y = Y, X = X, K = K, L = L)
+        data_help <- data_help[complete.cases(data_help), ]
+        if ("sem" %in% estimates) {
+            results_sem <- sem_appl(Y = data_help$Y, X = data_help$X,
+                                    K = data_help$K, L = data_help$L)
+        }
+        if ("mult_reg" %in% estimates) {
+            results_mult_reg <- mult_reg(setting = setting, Y = data_help$Y,
+                                         X = data_help$X, K = data_help$K,
+                                         L = data_help$L)
+        }
+        if ("res_reg" %in% estimates) {
+            results_res_reg <- res_reg(Y = data_help$Y, X = data_help$X,
+                                       K = data_help$K, L = data_help$L)
+        }
+        if ("ee" %in% estimates) {
+            point_estimates_ee <- get_estimates(setting = setting, Y = data_help$Y,
+                                                X = data_help$X, K = data_help$K,
+                                                L = data_help$L)
+            if (ee_se == "sandwich") {
+                # Obtain estimating functions expressions
+                estfunct <- est_funct_expr(setting = "GLM")
+                # Obtain matrices with all first and second derivatives
+                derivobj <- deriv_obj(setting = setting, logL1 = estfunct$logL1,
+                                      logL2 = estfunct$logL2, Y = data_help$Y,
+                                      X = data_help$X, K = data_help$K,
+                                      L = data_help$L,
+                                      estimates = point_estimates_ee)
+                # Obtain score and hessian matrices
+                results_scores <- scores(derivobj)
+                results_hessian <- hessian(derivobj)
+                # Obtain sandwich standard error estimates of the parameters
+                se_estimates_ee <- sandwich_se(setting = setting,
+                                               scores = results_scores,
+                                               hessian = results_hessian)
+            }
+            if (ee_se == "bootstrap") {
+                se_estimates_ee <- bootstrap_se(setting = setting, BS_rep = BS_rep,
+                                                Y = data_help$Y, X = data_help$X,
+                                                K = data_help$K, L = data_help$L)
+            }
+            if (ee_se == "naive") {
+                se_estimates_ee <- naive_se(setting = setting, Y = data_help$Y,
+                                            X = data_help$X, K = data_help$K,
+                                            L = data_help$L)
+            }
+            wald_test_stat_ee <- point_estimates_ee[1:8]/se_estimates_ee
+            pvalues_ee <- 2 * pnorm(-abs(wald_test_stat_ee))
+            results_ee <- list(point_estimates = point_estimates_ee[1:8],
+                               SE_estimates = se_estimates_ee,
+                               wald_test_stat = wald_test_stat_ee,
+                               pvalues = pvalues_ee)
+        }
+    }
+    if (setting == "AFT") {
+        data_help <- data.frame(Y = Y, X = X, K = K, L = L, C = C)
+        data_help <- data_help[complete.cases(data_help), ]
+        if ("mult_reg" %in% estimates) {
+            results_mult_reg <- mult_reg(setting = setting, Y = data_help$Y,
+                                         X = data_help$X, K = data_help$K,
+                                         L = data_help$L, C = data_help$C)
+        }
+        if ("ee" %in% estimates) {
+            point_estimates_ee <- get_estimates(setting = setting, Y = data_help$Y,
+                                                X = data_help$X, K = data_help$K,
+                                                L = data_help$L, C = data_help$C)
+            if (ee_se == "sandwich") {
+                # Obtain estimating functions expressions
+                estfunct <- est_funct_expr(setting = setting)
+                # Obtain matrices with all first and second derivatives
+                derivobj <- deriv_obj(setting = setting, logL1 = estfunct$logL1,
+                                      logL2 = estfunct$logL2, Y = data_help$Y,
+                                      X = data_help$X, K = data_help$K,
+                                      L = data_help$L, C = data_help$C,
+                                      estimates = point_estimates_ee)
+                # Obtain score and hessian matrices
+                results_scores <- scores(derivobj)
+                results_hessian <- hessian(derivobj)
+                # Obtain sandwich standard error estimates of the parameters
+                se_estimates_ee <- sandwich_se(setting = setting,
+                                               scores = results_scores,
+                                               hessian = results_hessian)
+            }
+            if (ee_se == "bootstrap") {
+                se_estimates_ee <- bootstrap_se(setting = setting, BS_rep = BS_rep,
+                                                Y = data_help$Y, X = data_help$X,
+                                                K = data_help$K, L = data_help$L,
+                                                C = data_help$C)
+            }
+            if (ee_se == "naive") {
+                se_estimates_ee <- naive_se(setting = setting, Y = data_help$Y,
+                                            X = data_help$X, K = data_help$K,
+                                            L = data_help$L, C = data_help$C)
+            }
+            wald_test_stat_ee <- point_estimates_ee[1:8]/se_estimates_ee
+            pvalues_ee <- 2 * pnorm(-abs(wald_test_stat_ee))
+            results_ee <- list(point_estimates = point_estimates_ee[1:8],
+                               SE_estimates = se_estimates_ee,
+                               wald_test_stat = wald_test_stat_ee,
+                               pvalues = pvalues_ee)
+        }
+    }
+    output <- list()
+    if ("ee" %in% estimates) {
+        output$results_ee <- results_ee
+    }
+    if ("mult_reg" %in% estimates) {
+        output$results_mult_reg <- results_mult_reg
+    }
+    if ("res_reg" %in% estimates) {
+        output$results_res_reg <- results_res_reg
+    }
+    if ("sem" %in% estimates) {
+        output$results_sem <- results_sem
+    }
+    class(output) <- "ciee"
+    return(output)
+}
+```
+```{r, echo=FALSE}
+ciee_loop <- function(setting = "GLM", estimates = c("ee", "mult_reg", "res_reg",
+                      "sem"), ee_se = c("sandwich"), BS_rep = NULL, Y = NULL,
+                      X = NULL, K = NULL, L = NULL, C = NULL) {
+    if (is.null(setting)) {
+        stop("setting has to be supplied.")
+    }
+    if (is.null(estimates)) {
+        stop("At least one method has to be computed.")
+    }
+    if ((("ee" %in% estimates) & is.null(ee_se)) | (("ee" %in% estimates)
+         & length(ee_se) > 1)) {
+        stop("If the estimating equations approach is chosen, one approach has to be chosen for the computation of standard errors.")
+    }
+    if (("bootstrap" %in% estimates) & is.null(BS_rep)) {
+        stop("For the computation of bootstrap standard errors, the number of bootstrap samples has to be chosen.")
+    }
+    if (is.null(Y) | is.null(X) | is.null(K) | is.null(L)) {
+        stop("Data of one or more variables is not supplied.")
+    }
+    if (setting == "AFT" & is.null(C)) {
+        stop("C has to be supplied for the AFT setting.")
+    }
+    if (setting == "AFT" & ("sem" %in% estimates)) {
+        stop("The structural equations modeling approach is only implemented for the GLM setting.")
+    }
+    if (setting == "AFT" & ("res_reg" %in% estimates)) {
+        stop("The regression of residuals approach is only implemented for the GLM setting.")
+    }
+    if ("sem" %in% estimates) {
+        results_sem <- list(point_estimates = NULL, SE_estimates = NULL,
+                            pvalues = NULL)
+    }
+    if ("mult_reg" %in% estimates) {
+        results_mult_reg <- list(point_estimates = NULL, SE_estimates = NULL,
+                                 pvalues = NULL)
+    }
+    if ("res_reg" %in% estimates) {
+        results_res_reg <- list(point_estimates = NULL, SE_estimates = NULL,
+                            pvalues = NULL)
+    }
+    if ("ee" %in% estimates) {
+        results_ee <- list(point_estimates = NULL, SE_estimates = NULL,
+                           wald_test_stat = NULL, pvalues = NULL)
+    }
+    k <- dim(X)[2]
+    for (i in 1:k) {
+        Xi <- X[, i]
+        if (setting == "GLM") {
+            data_help <- data.frame(Y = Y, X = Xi, K = K, L = L)
+            data_help <- data_help[complete.cases(data_help), ]
+
+            if ("sem" %in% estimates) {
+                sem_help <- sem_appl(Y = data_help$Y, X = data_help$X,
+                                     K = data_help$K, L = data_help$L)
+                results_sem$point_estimates[i] <- sem_help$point_estimates[5]
+                results_sem$SE_estimates[i] <- sem_help$SE_estimates[5]
+                results_sem$pvalues[i] <- sem_help$pvalues[5]
+                names(results_sem$point_estimates)[i] <-
+                  names(results_sem$SE_estimates)[i] <-
+                  names(results_sem$pvalues)[i] <- names(X)[i]
+            }
+            if ("mult_reg" %in% estimates) {
+                mult_reg_help <- mult_reg(setting = setting, Y = data_help$Y,
+                                          X = data_help$X, K = data_help$K,
+                                          L = data_help$L)
+                results_mult_reg$point_estimates[i] <- mult_reg_help$point_estimates[3]
+                results_mult_reg$SE_estimates[i] <- mult_reg_help$SE_estimates[3]
+                results_mult_reg$pvalues[i] <- mult_reg_help$pvalues[3]
+                names(results_mult_reg$point_estimates)[i] <-
+                  names(results_mult_reg$SE_estimates)[i] <-
+                  names(results_mult_reg$pvalues)[i] <- names(X)[i]
+            }
+            if ("res_reg" %in% estimates) {
+                res_reg_help <- res_reg(Y = data_help$Y, X = data_help$X,
+                                        K = data_help$K, L = data_help$L)
+                results_res_reg$point_estimates[i] <- res_reg_help$point_estimates[5]
+                results_res_reg$SE_estimates[i] <- res_reg_help$SE_estimates[5]
+                results_res_reg$pvalues[i] <- res_reg_help$pvalues[5]
+                names(results_res_reg$point_estimates)[i] <-
+                  names(results_res_reg$SE_estimates)[i] <-
+                  names(results_res_reg$pvalues)[i] <- names(X)[i]
+            }
+            if ("ee" %in% estimates) {
+                point_estimates_ee <- get_estimates(setting = setting,
+                                                    Y = data_help$Y,
+                                                    X = data_help$X,
+                                                    K = data_help$K,
+                                                    L = data_help$L)
+                if (ee_se == "sandwich") {
+                    # Obtain estimating functions expressions
+                    estfunct <- est_funct_expr(setting = "GLM")
+                    # Obtain matrices with all first and second derivatives
+                    derivobj <- deriv_obj(setting = setting,
+                                          logL1 = estfunct$logL1,
+                                          logL2 = estfunct$logL2,
+                                          Y = data_help$Y,
+                                          X = data_help$X,
+                                          K = data_help$K,
+                                          L = data_help$L,
+                                          estimates = point_estimates_ee)
+                    # Obtain score and hessian matrices
+                    results_scores <- scores(derivobj)
+                    results_hessian <- hessian(derivobj)
+                    # Obtain sandwich standard error estimates of the parameters
+                    se_estimates_ee <- sandwich_se(setting = setting,
+                                                   scores = results_scores,
+                                                   hessian = results_hessian)
+                }
+                if (ee_se == "bootstrap") {
+                    se_estimates_ee <- bootstrap_se(setting = setting,
+                                                    BS_rep = BS_rep,
+                                                    Y = data_help$Y,
+                                                    X = data_help$X,
+                                                    K = data_help$K,
+                                                    L = data_help$L)
+                }
+                if (ee_se == "naive") {
+                    se_estimates_ee <- naive_se(setting = setting,
+                                                Y = data_help$Y,
+                                                X = data_help$X,
+                                                K = data_help$K,
+                                                L = data_help$L)
+                }
+                results_ee$point_estimates[i] <- point_estimates_ee[7]
+                results_ee$SE_estimates[i] <- se_estimates_ee[7]
+                results_ee$wald_test_stat[i] <- point_estimates_ee[7]/
+                                                  se_estimates_ee[7]
+                results_ee$pvalues[i] <- 2 * pnorm(-abs(point_estimates_ee[7]/
+                                                        se_estimates_ee[7]))
+                names(results_ee$point_estimates)[i] <-
+                  names(results_ee$SE_estimates)[i] <-
+                  names(results_ee$wald_test_stat)[i] <-
+                  names(results_ee$pvalues)[i] <- names(X)[i]
+            }
+        }
+        if (setting == "AFT") {
+            data_help <- data.frame(Y = Y, X = Xi, K = K, L = L, C = C)
+            data_help <- data_help[complete.cases(data_help), ]
+            if ("mult_reg" %in% estimates) {
+                mult_reg_help <- mult_reg(setting = setting, Y = data_help$Y,
+                                          X = data_help$X, K = data_help$K,
+                                          L = data_help$L, C = data_help$C)
+                results_mult_reg$point_estimates[i] <- mult_reg_help$point_estimates[3]
+                results_mult_reg$SE_estimates[i] <- mult_reg_help$SE_estimates[3]
+                results_mult_reg$pvalues[i] <- mult_reg_help$pvalues[3]
+                names(results_mult_reg$point_estimates)[i] <-
+                  names(results_mult_reg$SE_estimates)[i] <-
+                  names(results_mult_reg$pvalues)[i] <- names(X)[i]
+            }
+            if ("ee" %in% estimates) {
+                point_estimates_ee <- get_estimates(setting = setting,
+                                                    Y = data_help$Y,
+                                                    X = data_help$X,
+                                                    K = data_help$K,
+                                                    L = data_help$L,
+                                                    C = data_help$C)
+                if (ee_se == "sandwich") {
+                    # Obtain estimating functions expressions
+                    estfunct <- est_funct_expr(setting = setting)
+                    # Obtain matrices with all first and second derivatives
+                    derivobj <- deriv_obj(setting = setting,
+                                          logL1 = estfunct$logL1,
+                                          logL2 = estfunct$logL2,
+                                          Y = data_help$Y,
+                                          X = data_help$X,
+                                          K = data_help$K,
+                                          L = data_help$L,
+                                          C = data_help$C,
+                                          estimates = point_estimates_ee)
+                    # Obtain score and hessian matrices
+                    results_scores <- scores(derivobj)
+                    results_hessian <- hessian(derivobj)
+                    # Obtain sandwich standard error estimates of the parameters
+                    se_estimates_ee <- sandwich_se(setting = setting,
+                                                   scores = results_scores,
+                                                   hessian = results_hessian)
+                }
+                if (ee_se == "bootstrap") {
+                    se_estimates_ee <- bootstrap_se(setting = setting,
+                                                    BS_rep = BS_rep,
+                                                    Y = data_help$Y,
+                                                    X = data_help$X,
+                                                    K = data_help$K,
+                                                    L = data_help$L,
+                                                    C = data_help$C)
+                }
+                if (ee_se == "naive") {
+                    se_estimates_ee <- naive_se(setting = setting,
+                                                Y = data_help$Y,
+                                                X = data_help$X,
+                                                K = data_help$K,
+                                                L = data_help$L,
+                                                C = data_help$C)
+                }
+                results_ee$point_estimates[i] <- point_estimates_ee[7]
+                results_ee$SE_estimates[i] <- se_estimates_ee[7]
+                results_ee$wald_test_stat[i] <- point_estimates_ee[7]/
+                                                  se_estimates_ee[7]
+                results_ee$pvalues[i] <- 2 * pnorm(-abs(point_estimates_ee[7]/
+                                                        se_estimates_ee[7]))
+                names(results_ee$point_estimates)[i] <-
+                  names(results_ee$SE_estimates)[i] <-
+                  names(results_ee$wald_test_stat)[i] <-
+                  names(results_ee$pvalues)[i] <- names(X)[i]
+            }
+        }
+    }
+    output <- list()
+    if ("ee" %in% estimates) {
+        output$results_ee <- results_ee
+    }
+    if ("mult_reg" %in% estimates) {
+        output$results_mult_reg <- results_mult_reg
+    }
+    if ("res_reg" %in% estimates) {
+        output$results_res_reg <- results_res_reg
+    }
+    if ("sem" %in% estimates) {
+        output$results_sem <- results_sem
+    }
+    class(output) <- "ciee"
+    return(output)
+}
+```
+```{r}
+results_ciee <- ciee(setting = "GLM", Y = dat$Y, X = dat$X, K = dat$K, L = dat$L,
+                     estimates = c("ee", "mult_reg", "res_reg", "sem"),
+                     ee_se = "sandwich")
+results_ciee
+
+maf <- 0.2
+n <- 1000
+dat <- generate_data(n = n, maf = maf)
+datX <- data.frame(X = dat$X)
+names(datX)[1] <- "X1"
+for(i in 2:10){
+ X <- rbinom(n, size = 2, prob = maf)
+ datX$X <- X
+ names(datX)[i] <- paste("X", i, sep="")
+}
+results_ciee_loop <- ciee_loop(setting = "GLM", Y = dat$Y, X = datX, K = dat$K, L = dat$L)
+results_ciee_loop
+```
+
+Both `ciee()` and `ciee_loop()` return `ciee` objects as output, and the implemented `summary.ciee()` function can be used through the generic `summary()` to provide a reader-friendly formatted output of the results.
+
+```{r, echo=FALSE}
+summary.ciee <- function(results = NULL) {
+    if (is.null(results)) {
+        stop("ciee output has to be supplied.")
+    }
+    res_out <- NULL
+    if ("results_ee" %in% names(results)) {
+        res_ee_out <- data.frame(point_estimates = results$results_ee$point_estimates,
+                                 SE_estimates = results$results_ee$SE_estimates,
+                                 wald_test_stat = results$results_ee$wald_test_stat,
+                                 pvalues = results$results_ee$pvalues)
+        rownames(res_ee_out) <- paste("CIEE", rownames(res_ee_out), sep = "_")
+        print(paste("Results based on estimating equations."))
+        print(res_ee_out)
+        res_out <- res_ee_out[,c(1,2,4)]
+    }
+    if ("results_mult_reg" %in% names(results)) {
+        res_mr_out <- data.frame(point_estimates = results$results_mult_reg$point_estimates,
+                                 SE_estimates = results$results_mult_reg$SE_estimates,
+                                 pvalues = results$results_mult_reg$pvalues)
+        rownames(res_mr_out) <- paste("MR", rownames(res_mr_out), sep = "_")
+        print(paste("Results based on traditional multiple regression."))
+        print(res_mr_out)
+        res_out <- rbind(res_out, res_mr_out)
+    }
+    if ("results_res_reg" %in% names(results)) {
+        res_rr_out <- data.frame(point_estimates = results$results_res_reg$point_estimates,
+                                 SE_estimates = results$results_res_reg$SE_estimates,
+                                 pvalues = results$results_res_reg$pvalues)
+        rownames(res_rr_out) <- paste("RR", rownames(res_rr_out), sep = "_")
+        print(paste("Results based on traditional regression of residuals."))
+        print(res_rr_out)
+        res_out <- rbind(res_out, res_rr_out)
+    }
+    if ("results_sem" %in% names(results)) {
+        res_sem_out <- data.frame(point_estimates = results$results_sem$point_estimates,
+                                  SE_estimates = results$results_sem$SE_estimates,
+                                  pvalues = results$results_sem$pvalues)
+        rownames(res_sem_out) <- paste("SEM", rownames(res_sem_out), sep = "_")
+        print(paste("Results based on structural equation modeling."))
+        print(res_sem_out)
+        res_out <- rbind(res_out, res_sem_out)
+    }
+    invisible(res_out)
+}
+```
+```{r}
+summary(results_ciee)
+summary(results_ciee_loop)
+```
+
+## References
+
+Bollen KA (1989). Structural equations with latent variables. New York: John Wiley & Sons.
+
+Konigorski S, Wang Y, Cigsar C, Yilmaz YE (2017). Estimating and testing direct genetic effects in directed acyclic graphs using estimating equations. Genetic Epidemiology, in press.
+
+Rosseel Y (2012). lavaan: an R package for structural equation modeling. Journal of Statistical Software, 48(2), 1–36.
+
+Vansteelandt S, Goetgeluk S, Lutz S, et al. (2009). On the adjustment for covariates in genetic association analysis: a novel, simple principle to infer direct causal effects. Genetic Epidemiology, 33, 394-405.
+

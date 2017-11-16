@@ -1,0 +1,23 @@
+citHeader("To cite CIEE in publications use:")
+
+vers = paste('R package version', meta$Version)
+
+citEntry(
+  entry = 'manual',
+  title = paste('CIEE:', meta$Title),
+  author = Filter(function(p) 'aut' %in% p$role, as.person(meta$Author)),
+  year = "2017",
+  note = vers,
+  url = meta$URL,
+  textVersion = paste('Stefan Konigorski & Yildiz E. Yilmaz (', 2017, '). CIEE: ', meta$Title, '. ', vers, '.', sep = '')
+)
+citEntry(
+  entry = 'article',
+  title = paste('Estimating and testing direct genetic effects in directed acyclic graphs using estimating equations'),
+  author = personList(as.person("Stefan Konigorski"), as.person("Yuan Wang"), as.person("Candemir Cigsar"), as.person("Yildiz E. Yilmaz")),
+  year = "2017",
+  journal = "Genetic Epidemiology",
+  textVersion = paste('Konigorski S, Wang Y, Cigsar C, Yilmaz YE (2017). Estimating and testing direct genetic effects in directed acyclic graphs using estimating equations. Genetic Epidemiology, in press.', sep = '')
+)
+
+
