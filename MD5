@@ -1,4 +1,4 @@
-a139e9ac3af662c5a186711b16e43e00 *DESCRIPTION
+34bf5ca0c56f14843df9ff5481bd2970 *DESCRIPTION
 26dd763ac03eaeef7526268826b3110a *NAMESPACE
 c0f094849eddc4f775681fcba78b3dee *R/ciee.R
 174307448286a148462f053439f5adda *R/deriv_functions.R
@@ -11,11 +11,11 @@ d93f331bdd1c1db85271028c751fbb2c *R/se_estimates_sandwich.R
 9f07795e4941869f6febef2ea604e5a2 *R/sem_functions.R
 2d87486aa676a4b3248e7d9928bf89b0 *R/summary_function.R
 78ca9cc35856b3517745cf43f2646005 *R/traditional_functions.R
-5767704a02cf17eff6488554cabd4393 *build/vignette.rds
-8c77fc4bca2e2470c079a5fc95fb846f *inst/CITATION
+190fec013154dd342b7a0dfe0a488846 *build/vignette.rds
+6afba6c5db021a2bfb12179628d14bf4 *inst/CITATION
 e45ae3909ac1f44071eaee46ede7b1c5 *inst/doc/ciee.R
-6c7907f69e3aaee742fb11939a741610 *inst/doc/ciee.Rmd
-4ced0f5fc54528a9f3bc200b98c69717 *inst/doc/ciee.pdf
+b6b2fb29d186c99e0641596d27ca1b1b *inst/doc/ciee.Rmd
+65cffc4877c4b66accfe2385a66715b9 *inst/doc/ciee.pdf
 764ebfbee49e5bd1ca60d3d803f4524b *man/bootstrap_se.Rd
 21a7e666e6e5408c07c8744c1c0cf6d2 *man/ciee.Rd
 e8bac4d4a6c3bb1c3e745d3b62600e2a *man/est_funct_expr.Rd
@@ -27,5 +27,5 @@ c8bbcf40bb996896d1351276cdb0470d *man/score_and_hessian_matrix_functions.Rd
 dd6a9212519f8ddeeed1a1dfa74e34cc *man/sem_appl.Rd
 3890cf32bc7baca16b7840e813d15498 *man/summary.ciee.Rd
 8c87144a8a717847e6a9323400aaaeab *man/traditional_regression_functions.Rd
-90376290fe1dd35064af0550ada7ce04 *vignettes/Figure1.tiff
-6c7907f69e3aaee742fb11939a741610 *vignettes/ciee.Rmd
+ad5357792810b5cf9a84e7da1d237fea *vignettes/Figure1.pdf
+b6b2fb29d186c99e0641596d27ca1b1b *vignettes/ciee.Rmd

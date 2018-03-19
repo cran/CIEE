@@ -6,18 +6,20 @@ citEntry(
   entry = 'manual',
   title = paste('CIEE:', meta$Title),
   author = Filter(function(p) 'aut' %in% p$role, as.person(meta$Author)),
-  year = "2017",
+  year = "2018",
   note = vers,
   url = meta$URL,
-  textVersion = paste('Stefan Konigorski & Yildiz E. Yilmaz (', 2017, '). CIEE: ', meta$Title, '. ', vers, '.', sep = '')
+  textVersion = paste('Stefan Konigorski & Yildiz E. Yilmaz (', 2018, '). CIEE: ', meta$Title, '. ', vers, '.', sep = '')
 )
 citEntry(
   entry = 'article',
   title = paste('Estimating and testing direct genetic effects in directed acyclic graphs using estimating equations'),
   author = personList(as.person("Stefan Konigorski"), as.person("Yuan Wang"), as.person("Candemir Cigsar"), as.person("Yildiz E. Yilmaz")),
-  year = "2017",
+  year = "2018",
   journal = "Genetic Epidemiology",
-  textVersion = paste('Konigorski S, Wang Y, Cigsar C, Yilmaz YE (2017). Estimating and testing direct genetic effects in directed acyclic graphs using estimating equations. Genetic Epidemiology, in press.', sep = '')
+  number = "42",
+  pages = "174--186",
+  textVersion = paste('Konigorski S, Wang Y, Cigsar C, Yilmaz YE (2018). Estimating and testing direct genetic effects in directed acyclic graphs using estimating equations. Genetic Epidemiology, 42: 174--186.', sep = '')
 )
 
 

@@ -1,7 +1,7 @@
 ---
 title: "Estimating and Testing Direct Effects in Directed Acyclic Graphs using Estimating Equations"
 author: "Stefan Konigorski"
-date: "November 16, 2017"
+date: "March 19, 2018"
 output: pdf_document
 vignette: >
   %\VignetteIndexEntry{Estimating and Testing Direct Effects in Directed Acyclic Graphs using Estimating Equations}
@@ -13,11 +13,11 @@ vignette: >
 
 In any association study, it is important to distinguish direct and indirect effects in order to build truly functional models. For this purpose, we consider a directed acyclic graph (DAG) setting with an exposure variable, primary and intermediate outcome variables, and confounding factors. In order to make valid statistical inference on the direct effect of the exposure on the primary outcome, it is necessary to consider all potential effects in the graph, and we propose to use the estimating equation method with robust Huber-White sandwich standard errors. Then, a large-sample Wald-type test statistic is computed for testing the absence of the direct effect. In this package, the proposed causal inference method based on estimating equations (CIEE) is implemented for both the analysis of continuous and time-to-event primary outcomes subject to censoring for the model in Figure 1. Additionally, standard multiple regression, regression of residuals, and the structural equation approach are implemented for fitting the same model. 
 
-Results from simulation studies (Konigorski et al., 2017) showed that CIEE successfully removes the effect of intermediate outcomes from the primary outcome and is robust against measured and unmeasured confounding of the indirect effect through observed factors. Also, an application in a genetic association study in the same study showed that CIEE can identify genetic variants that would be missed by traditional regression methods. Both multiple regression methods and the structural equation method fail in some scenarios where their corresponding test statistics lead to inflated type I errors. An alternative approach for the analysis of continuous traits is the sequential G-estimation method (Vansteelandt et al., 2009).
+Results from simulation studies (Konigorski et al., 2018) showed that CIEE successfully removes the effect of intermediate outcomes from the primary outcome and is robust against measured and unmeasured confounding of the indirect effect through observed factors. Also, an application in a genetic association study in the same study showed that CIEE can identify genetic variants that would be missed by traditional regression methods. Both multiple regression methods and the structural equation method fail in some scenarios where their corresponding test statistics lead to inflated type I errors. An alternative approach for the analysis of continuous traits is the sequential G-estimation method (Vansteelandt et al., 2009).
 
 In this package, CIEE is implemented for the model described in the DAG in Figure 1, which includes the direct effect $\alpha_{XY}$ of an exposure X on the primary outcome Y and an indirect effect of X on Y through a secondary outcome K. The model further includes measured and unmeasured factors L and U, respectively, which potentially confound the effect of K on Y. CIEE can also be applied to different models with different error distributions. The goal is to estimate and test the direct effect $\alpha_{XY}$, while removing the indirect effect of X on Y through K, and with robustness against effects of L and U. Without restriction of generality, it is assumed that there aren't any factors affecting X and that any such factors are included as covariates in the analysis or have been dealt with using other approaches. Also, we generally assume that either $\alpha_{LY}=0$ (L is a factor influencing K) or $\alpha_{XL}=0$ (L is a measured confounder of $K \to Y$). Otherwise, the effect of L as intermediate outcome could be removed from Y in the analysis analogously to K.
 
-![Overview of the underlying directed acyclic graph considered in this study. It is assumed that $\alpha_{LY}=0$ so that L is a measured predictive factor of K, however, CIEE is also valid if L is a measured confounder of $K \to Y$ (i.e., $\alpha_{LY} \neq 0$ and $\alpha_{XL}=0$). ](Figure1.tiff)
+![Overview of the underlying directed acyclic graph considered in this study. It is assumed that $\alpha_{LY}=0$ so that L is a measured predictive factor of K, however, CIEE is also valid if L is a measured confounder of $K \to Y$ (i.e., $\alpha_{LY} \neq 0$ and $\alpha_{XL}=0$). ](Figure1.pdf)
 
 ## Alternative approaches
 
@@ -278,7 +278,7 @@ where $\phi$ is the probability density function of the standard normal distribu
 
 By solving the first five estimating equations based on $l_1(\theta)$, we are hence obtaining estimates of $\alpha_0, \alpha_1, \alpha_2, \alpha_3, \sigma_1^2$. Analogously, solving the last three estimating equations based on $l_2(\theta)$ yields estimates of $\alpha_4, \alpha_{XY}, \sigma_2^2$. To give an intuition on how these estimating equations are obtained, $l_1(\theta)$ is the log-likelihood function under the model in (1) and $l_2(\theta)$ is the log-likelihood function under the model in (3) given that $\alpha_1$ is known. All parameters in $\theta$ are estimated simultaneously and the additional variability obtained in the outcome adjustment in (2) is considered by using the robust Huber-White sandwich estimator of the standard error of $\hat{\theta}$. Then, the large sample Wald-type test statistic $\hat{\theta}/\widehat{SE}(\hat{\theta})$, which has an asymptotic standard normal distribution, is computed to test the absence of the exposure effect $\alpha_{XY}$.
 
-For the analysis of a censored time-to-event primary outcome Y, the estimating equations can be constructed as described above for a quantitative primary phenotype (for the same parameters except for $\sigma_1$ instead of $\sigma_1^2$), but in order to remove the effect of K from Y, the true underlying log survival times $Y_{est}$ need to be estimated for censored survival times. For uncensored survival times, $Y_{est}$ equals the observed log-survival time Y. Then, the estimating equations are constructed accordingly, the robust Huber-White sandwich estimator of the standard error is obtained and the large-sample Wald-type tests are computed. For more statistical details, see Konigorski et al. (2017).
+For the analysis of a censored time-to-event primary outcome Y, the estimating equations can be constructed as described above for a quantitative primary phenotype (for the same parameters except for $\sigma_1$ instead of $\sigma_1^2$), but in order to remove the effect of K from Y, the true underlying log survival times $Y_{est}$ need to be estimated for censored survival times. For uncensored survival times, $Y_{est}$ equals the observed log-survival time Y. Then, the estimating equations are constructed accordingly, the robust Huber-White sandwich estimator of the standard error is obtained and the large-sample Wald-type tests are computed. For more statistical details, see Konigorski et al. (2018).
 
 In the implementation of CIEE in this package, the `est_funct_expr()` function contains the estimating equations as an expression.
 
@@ -1183,7 +1183,7 @@ summary(results_ciee_loop)
 
 Bollen KA (1989). Structural equations with latent variables. New York: John Wiley & Sons.
 
-Konigorski S, Wang Y, Cigsar C, Yilmaz YE (2017). Estimating and testing direct genetic effects in directed acyclic graphs using estimating equations. Genetic Epidemiology, in press.
+Konigorski S, Wang Y, Cigsar C, Yilmaz YE (2018). Estimating and testing direct genetic effects in directed acyclic graphs using estimating equations. Genetic Epidemiology, 42: 174-186.
 
 Rosseel Y (2012). lavaan: an R package for structural equation modeling. Journal of Statistical Software, 48(2), 1–36.
 
